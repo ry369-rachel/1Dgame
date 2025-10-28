@@ -84,8 +84,13 @@ function draw() {
   let refW = 48;
   let refH = 48;
   let centerX = width / 2;
+
+  // center the reference block and the tiles row vertically
+  // totalGroupHeight = reference block height + gap(28) + tiles row height
+  let totalGroupHeight = refH + 28 + tileH;
+  let topY = height / 2 - totalGroupHeight / 2;
   let refX = centerX - refW / 2;
-  let refY = 36;
+  let refY = topY;
   stroke(40);
   strokeWeight(1);
   fill(refColor);
@@ -98,15 +103,40 @@ function draw() {
   // (Removed large mix preview) we'll draw only the small mix tile in the row
 
   // Draw tiles row (visual gradient) below the reference block
-  let rowY = refY + refH + 28;
+  // Add a small adjustable offset so we can move the entire row down without
+  // affecting the reference block position.
+  let tileRowOffset = 60; // px to push the tile row down
+  let rowY = refY + refH + 28 + tileRowOffset;
   let totalRowWidth = tiles * (tileW + 2);
   let rowStartX = centerX - totalRowWidth / 2;
+
+  // Compute live mix color: start as white, but once players move (lastActive != null)
+  // show the blended color and update it as players move. If locked, keep mixColor
+  // as computed at lock (computeMixAndCheck already set it), otherwise compute live.
+  if (!locked) {
+    if (lastActive !== null) {
+      let cR = colorForIndex(redIndex);
+      let cB = colorForIndex(blueIndex);
+      mixColor = color(
+        round((red(cR) + red(cB)) / 2),
+        round((green(cR) + green(cB)) / 2),
+        round((blue(cR) + blue(cB)) / 2)
+      );
+    } else {
+      mixColor = color(255); // initial neutral white until players start moving
+    }
+  }
 
   // draw tiles
   for (let i = 0; i < tiles; i++) {
     let x = rowStartX + i * (tileW + 2);
     let y = rowY;
-    fill(colorForIndex(i));
+    // for the central mix tile, use the live mixColor so it updates as players move
+    if (i === mixIndex) {
+      fill(mixColor);
+    } else {
+      fill(colorForIndex(i));
+    }
     stroke(0);
     strokeWeight(1);
     rect(x, y, tileW, tileH);
@@ -135,45 +165,46 @@ function draw() {
   blueIndex = constrain(blueIndex, mixIndex + 1, tiles - 1);
 
   let rx = rowStartX + redIndex * (tileW + 2);
-  let ry = rowY - 10;
+  // base selector Y should match the tile row so the frame overlaps the tile
+  let ry = rowY;
   push();
   if (lastActive === 'red' && !locked) {
     stroke('#00FFFF');
-    strokeWeight(5);
+    strokeWeight(3);
   } else {
     stroke(0);
-    strokeWeight(1);
+    strokeWeight(3);
   }
   noFill();
-  rect(rx - 6, ry - 6, tileW + 12, tileH + 12);
-  // fill a semi-square showing player's color (left label)
+  // draw selector frame exactly the same size as a tile and aligned to it
+  rect(rx, ry, tileW, tileH);
+  // label text (no colored square) — move text up closer to selector
   noStroke();
-  fill(255, 0, 0);
-  rect(rx + tileW / 2 - 10, ry + tileH + 18, 20, 20);
   fill(0);
   textSize(12);
-  text('Red', rx + tileW / 2, ry + tileH + 42);
+  text('Player 1', rx + tileW / 2, ry + tileH + 14);
   pop();
 
   // Blue selector
   let bx = rowStartX + blueIndex * (tileW + 2);
-  let by = rowY - 10;
+  // base selector Y should match the tile row so the frame overlaps the tile
+  let by = rowY;
   push();
   if (lastActive === 'blue' && !locked) {
     stroke('#00FFFF');
-    strokeWeight(5);
+    strokeWeight(3);
   } else {
     stroke(0);
-    strokeWeight(1);
+    strokeWeight(3);
   }
   noFill();
-  rect(bx - 6, by - 6, tileW + 12, tileH + 12);
+  // draw selector frame exactly the same size as a tile and aligned to it
+  rect(bx, by, tileW, tileH);
+  // label text (no colored square) — move text up closer to selector
   noStroke();
-  fill(0, 0, 255);
-  rect(bx + tileW / 2 - 10, by + tileH + 18, 20, 20);
   fill(0);
   textSize(12);
-  text('Blue', bx + tileW / 2, by + tileH + 42);
+  text('Player 2', bx + tileW / 2, by + tileH + 14);
   pop();
 
   // (Large mix preview removed) we already draw the small mix tile in the row
@@ -182,8 +213,9 @@ function draw() {
   if (stateMessage) {
     fill(0);
     textSize(20);
-    // place message above the row (near the reference area)
-    text(stateMessage, centerX, refY + refH + 6);
+    // place message near the tiles; add tileRowOffset so the popup moves down
+    // when the tile row has been shifted (keeps relative spacing)
+    text(stateMessage, centerX, refY + refH + 6 + (typeof tileRowOffset !== 'undefined' ? tileRowOffset : 0));
   }
 
   // Debug: optionally show reference indices (hidden normally) - comment out if undesired
@@ -235,9 +267,12 @@ function computeMixAndCheck() {
   // compare mixColor to refColor exactly
   if (colorsEqual(mixColor, refColor)) {
     stateMessage = 'YOU WIN!';
-    // keep locked and show victory
+    // keep locked and show victory, then restart after a short delay (same as No Match)
+    setTimeout(() => {
+      generateReference();
+    }, 1400);
   } else {
-    stateMessage = 'No match — restarting...';
+    stateMessage = 'No Match';
     // restart after a short delay
     setTimeout(() => {
       generateReference();
