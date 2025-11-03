@@ -23,6 +23,10 @@ let refColor;
 let refIndices = [0, 0];
 let mixColor;
 let stateMessage = '';
+// move sound (play when selectors move) + win/lose sounds
+let moveSound;
+let winSound;
+let loseSound;
 
 function setup() {
   let cnv = createCanvas(canvasW, canvasH);
@@ -31,6 +35,38 @@ function setup() {
   textAlign(CENTER, CENTER);
   noStroke();
   generateReference();
+}
+
+function preload() {
+  // load move sound; place 0001.mp3 in the project root (next to index.html)
+  if (typeof loadSound === 'function') {
+    soundFormats('mp3');
+    moveSound = loadSound('0001.mp3', () => {}, (e) => { console.log('move sound load error', e); });
+    winSound = loadSound('winning.mp3', () => {}, (e) => { console.log('win sound load error', e); });
+    loseSound = loadSound('losing.mp3', () => {}, (e) => { console.log('lose sound load error', e); });
+  } else {
+    console.log('p5.sound not available');
+  }
+}
+
+function playMoveSound() {
+  try {
+    if (moveSound && moveSound.isLoaded()) moveSound.play();
+  } catch (e) {
+    // swallow errors if sound not available
+  }
+}
+
+function playWinSound() {
+  try {
+    if (winSound && winSound.isLoaded()) winSound.play();
+  } catch (e) {}
+}
+
+function playLoseSound() {
+  try {
+    if (loseSound && loseSound.isLoaded()) loseSound.play();
+  } catch (e) {}
 }
 
 function generateReference() {
@@ -233,6 +269,10 @@ function keyPressed() {
   // make keys case-insensitive
   let k = key.toLowerCase();
 
+  // remember previous indices to detect actual movement
+  let prevRed = redIndex;
+  let prevBlue = blueIndex;
+
   if (k === 'a') {
     redIndex = max(0, redIndex - 1);
     lastActive = 'red';
@@ -252,6 +292,11 @@ function keyPressed() {
     locked = true;
     computeMixAndCheck();
   }
+
+  // if either selector actually moved, play move sound
+  if (redIndex !== prevRed || blueIndex !== prevBlue) {
+    playMoveSound();
+  }
 }
 
 function computeMixAndCheck() {
@@ -267,13 +312,15 @@ function computeMixAndCheck() {
   // compare mixColor to refColor exactly
   if (colorsEqual(mixColor, refColor)) {
     stateMessage = 'YOU WIN!';
-    // keep locked and show victory, then restart after a short delay (same as No Match)
+    // play win sound, keep locked and show victory, then restart after a short delay
+    playWinSound();
     setTimeout(() => {
       generateReference();
     }, 1400);
   } else {
     stateMessage = 'No Match';
-    // restart after a short delay
+    // play lose sound and restart after a short delay
+    playLoseSound();
     setTimeout(() => {
       generateReference();
     }, 1400);
