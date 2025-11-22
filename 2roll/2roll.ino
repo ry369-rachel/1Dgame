@@ -2,6 +2,7 @@
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_Sensor.h>
 #include <Keyboard.h>
+#include <Adafruit_NeoPixel.h>
 
 Adafruit_MPU6050 mpu1;
 Adafruit_MPU6050 mpu2;
@@ -22,15 +23,58 @@ const float ENTER_THRESH = 12.0; // degrees to enter a direction
 const float EXIT_THRESH = 8.0;   // degrees to exit (hysteresis)
 
 // Repeat/hold behavior: send repeated key events while tilt is held
-int activeDir1 = 0; // -1 = A, 0 = none, 1 = D
-int activeDir2 = 0; // -1 = J, 0 = none, 1 = L
-unsigned long lastSent1 = 0;
-unsigned long lastSent2 = 0;
-const unsigned long REPEAT_INTERVAL = 160; // ms between repeated writes while holding
+// Zone-based control: detect entering discrete angle zones
+int lastZone1 = 0; // previous zone for MPU1
+int lastZone2 = 0; // previous zone for MPU2
 
 // Button for 'R' action (one-shot on press)
 const int BUTTON_PIN = 4; // button to GND, we'll use INPUT_PULLUP
 int prevButtonState = HIGH;
+// second button
+const int BUTTON_PIN2 = 5;
+int prevButtonState2 = HIGH;
+
+// double-click detection
+unsigned long lastPressTime1 = 0;
+unsigned long lastPressTime2 = 0;
+int clickCount1 = 0;
+int clickCount2 = 0;
+const unsigned long DOUBLE_CLICK_MS = 400; // ms window for double-click
+
+// debounce tracking
+unsigned long lastBounce1 = 0;
+unsigned long lastBounce2 = 0;
+const unsigned long DEBOUNCE_MS = 50;
+
+// NeoPixel LEDs on D9 and D10 (25 LEDs each)
+#define LED_LEFT_PIN 9
+#define LED_RIGHT_PIN 10
+const int NUM_LEDS = 25; // number of LEDs per strip
+Adafruit_NeoPixel ledLeft = Adafruit_NeoPixel(NUM_LEDS, LED_LEFT_PIN, NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel ledRight = Adafruit_NeoPixel(NUM_LEDS, LED_RIGHT_PIN, NEO_GRB + NEO_KHZ800);
+int leftColorIndex = 0;  // 0=red,1=green,2=blue
+int rightColorIndex = 0; // 0=blue,1=green,2=red
+
+// helper: map angle to zone number per spec
+int getZone(float angle) {
+  // dead zone
+  if (angle > -10.0 && angle < 10.0) return 0;
+  // right tilt positive zones
+  if (angle >= 30.0 && angle <= 50.0) return 1;
+  if (angle > 50.0 && angle <= 70.0) return 2;
+  if (angle > 70.0 && angle <= 90.0) return 3;
+  if (angle > 90.0 && angle <= 110.0) return 4;
+  if (angle > 110.0 && angle <= 130.0) return 5;
+  if (angle > 130.0 && angle <= 150.0) return 6;
+  // left tilt negative zones
+  if (angle <= -30.0 && angle >= -50.0) return -1;
+  if (angle < -50.0 && angle >= -70.0) return -2;
+  if (angle < -70.0 && angle >= -90.0) return -3;
+  if (angle < -90.0 && angle >= -110.0) return -4;
+  if (angle < -110.0 && angle >= -130.0) return -5;
+  if (angle < -130.0 && angle >= -150.0) return -6;
+  return 0;
+}
 
 void setup() {
   Serial.begin(115200);
@@ -65,6 +109,23 @@ void setup() {
 
   // configure button pin with internal pull-up
   pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(BUTTON_PIN2, INPUT_PULLUP);
+
+  // initialize LEDs
+  ledLeft.begin();
+  ledRight.begin();
+  // set a comfortable default brightness (0-255)
+  ledLeft.setBrightness(80);
+  ledRight.setBrightness(80);
+  // initial colors: left red, right blue
+  for (int i = 0; i < NUM_LEDS; i++) {
+    ledLeft.setPixelColor(i, ledLeft.Color(255, 0, 0));
+  }
+  ledLeft.show();
+  for (int i = 0; i < NUM_LEDS; i++) {
+    ledRight.setPixelColor(i, ledRight.Color(0, 0, 255));
+  }
+  ledRight.show();
 }
 
 void loop() {
@@ -97,50 +158,33 @@ void loop() {
   Serial.print(angle2);
   Serial.println("°");
 
-  // --- Angle1 -> D / A (use smoothedAngle1 + hysteresis) ---
-  // We'll send repeated Keyboard.write() events while the tilt remains in one direction
-  int dir1 = 0;
-  if (smoothedAngle1 > ENTER_THRESH) dir1 = 1;        // D
-  else if (smoothedAngle1 < -ENTER_THRESH) dir1 = -1; // A
-
-  if (dir1 != 0) {
-    if (activeDir1 != dir1) {
-      // newly entered a direction: send one key event immediately
-      if (dir1 == 1) Keyboard.write('d'); else Keyboard.write('a');
-      lastSent1 = millis();
-      activeDir1 = dir1;
+  // --- Zone-based angle mapping ---
+  int zone1 = getZone(smoothedAngle1);
+  if (zone1 != lastZone1) {
+    if (zone1 > 0) {
+      Serial.print("MPU1 entered right zone "); Serial.println(zone1);
+      Keyboard.write('D');
+    } else if (zone1 < 0) {
+      Serial.print("MPU1 entered left zone "); Serial.println(zone1);
+      Keyboard.write('A');
     } else {
-      // still holding the same direction: send repeats at REPEAT_INTERVAL
-      if (millis() - lastSent1 >= REPEAT_INTERVAL) {
-        if (dir1 == 1) Keyboard.write('d'); else Keyboard.write('a');
-        lastSent1 = millis();
-      }
+      Serial.println("MPU1 returned to dead zone");
     }
-  } else {
-    // within neutral region: apply exit hysteresis to clear activeDir only when angle returns closer to 0
-    if (activeDir1 == 1 && smoothedAngle1 < EXIT_THRESH) activeDir1 = 0;
-    if (activeDir1 == -1 && smoothedAngle1 > -EXIT_THRESH) activeDir1 = 0;
+    lastZone1 = zone1;
   }
 
-  // --- Angle2 -> L / J (use smoothedAngle2 + hysteresis) ---
-  int dir2 = 0;
-  if (smoothedAngle2 > ENTER_THRESH) dir2 = 1;        // L
-  else if (smoothedAngle2 < -ENTER_THRESH) dir2 = -1; // J
-
-  if (dir2 != 0) {
-    if (activeDir2 != dir2) {
-      if (dir2 == 1) Keyboard.write('l'); else Keyboard.write('j');
-      lastSent2 = millis();
-      activeDir2 = dir2;
+  int zone2 = getZone(smoothedAngle2);
+  if (zone2 != lastZone2) {
+    if (zone2 > 0) {
+      Serial.print("MPU2 entered right zone "); Serial.println(zone2);
+      Keyboard.write('L');
+    } else if (zone2 < 0) {
+      Serial.print("MPU2 entered left zone "); Serial.println(zone2);
+      Keyboard.write('J');
     } else {
-      if (millis() - lastSent2 >= REPEAT_INTERVAL) {
-        if (dir2 == 1) Keyboard.write('l'); else Keyboard.write('j');
-        lastSent2 = millis();
-      }
+      Serial.println("MPU2 returned to dead zone");
     }
-  } else {
-    if (activeDir2 == 1 && smoothedAngle2 < EXIT_THRESH) activeDir2 = 0;
-    if (activeDir2 == -1 && smoothedAngle2 > -EXIT_THRESH) activeDir2 = 0;
+    lastZone2 = zone2;
   }
 
   // Debug: show which keys are currently pressed
@@ -154,11 +198,80 @@ void loop() {
 
   // --- Button handling: one-shot send 'r' when button transitions from HIGH -> LOW ---
   int buttonState = digitalRead(BUTTON_PIN);
-  if (buttonState == LOW && prevButtonState == HIGH) {
-    // button just pressed
-    Keyboard.write('r');
-  }
-  prevButtonState = buttonState;
+  int buttonState2 = digitalRead(BUTTON_PIN2);
 
-  delay(20); // faster response; adjust if needed
+  unsigned long now = millis();
+
+  // BUTTON 1 (D4) handling: detect first click and wait for double-click window before sending single 'r'
+  if (buttonState == LOW && prevButtonState == HIGH) {
+    // falling edge detected
+    if ((now - lastBounce1) > DEBOUNCE_MS) {
+      lastBounce1 = now;
+      if (clickCount1 == 0) {
+        // first click: record time and wait for possible second click
+        clickCount1 = 1;
+        lastPressTime1 = now;
+        Serial.println("Button1 first click recorded");
+      } else if (clickCount1 == 1 && (now - lastPressTime1) <= DOUBLE_CLICK_MS) {
+        // second click within window -> double-click
+        Serial.println("Button1 double-click -> sending 'S'");
+        Keyboard.write('S');
+        // cycle left color: red -> green -> blue
+        leftColorIndex = (leftColorIndex + 1) % 3;
+        uint32_t col;
+        if (leftColorIndex == 0) col = ledLeft.Color(255, 0, 0);
+        else if (leftColorIndex == 1) col = ledLeft.Color(0, 255, 0);
+        else col = ledLeft.Color(0, 0, 255);
+        for (int pi = 0; pi < NUM_LEDS; pi++) ledLeft.setPixelColor(pi, col);
+        ledLeft.show();
+        Serial.print("Left LED color index -> "); Serial.println(leftColorIndex);
+        // reset
+        clickCount1 = 0;
+        lastPressTime1 = 0;
+      }
+    }
+  }
+  // if we've seen a single first click and the window expired, treat as single press
+  if (clickCount1 == 1 && (now - lastPressTime1) > DOUBLE_CLICK_MS) {
+    Serial.println("Button1 single-click timeout -> sending 'r'");
+    Keyboard.write('r');
+    clickCount1 = 0;
+    lastPressTime1 = 0;
+  }
+
+  // BUTTON 2 (D5) handling: same pattern as Button1
+  if (buttonState2 == LOW && prevButtonState2 == HIGH) {
+    if ((now - lastBounce2) > DEBOUNCE_MS) {
+      lastBounce2 = now;
+      if (clickCount2 == 0) {
+        clickCount2 = 1;
+        lastPressTime2 = now;
+        Serial.println("Button2 first click recorded");
+      } else if (clickCount2 == 1 && (now - lastPressTime2) <= DOUBLE_CLICK_MS) {
+        Serial.println("Button2 double-click -> sending 'K'");
+        Keyboard.write('K');
+        rightColorIndex = (rightColorIndex + 1) % 3; // blue -> green -> red
+        uint32_t col2;
+        if (rightColorIndex == 0) col2 = ledRight.Color(0, 0, 255);
+        else if (rightColorIndex == 1) col2 = ledRight.Color(0, 255, 0);
+        else col2 = ledRight.Color(255, 0, 0);
+        for (int pi2 = 0; pi2 < NUM_LEDS; pi2++) ledRight.setPixelColor(pi2, col2);
+        ledRight.show();
+        Serial.print("Right LED color index -> "); Serial.println(rightColorIndex);
+        clickCount2 = 0;
+        lastPressTime2 = 0;
+      }
+    }
+  }
+  if (clickCount2 == 1 && (now - lastPressTime2) > DOUBLE_CLICK_MS) {
+    Serial.println("Button2 single-click timeout -> sending 'r'");
+    Keyboard.write('r');
+    clickCount2 = 0;
+    lastPressTime2 = 0;
+  }
+
+  prevButtonState = buttonState;
+  prevButtonState2 = buttonState2;
+
+  delay(50); // stability per spec
 }

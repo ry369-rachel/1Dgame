@@ -27,6 +27,48 @@ let stateMessage = '';
 let moveSound;
 let winSound;
 let loseSound;
+// Level configuration: level 1 => 3+1+3 = 7 tiles, level2 => 5+1+5 = 11, level3 => 7+1+7 = 15
+let level = 1;
+const LEVELS = [
+  { left: 3, right: 3 },
+  { left: 5, right: 5 },
+  { left: 7, right: 7 }
+];
+
+function setLevel(n) {
+  // clamp
+  level = constrain(n, 1, LEVELS.length);
+  const cfg = LEVELS[level - 1];
+  leftCount = cfg.left;
+  rightCount = cfg.right;
+  mixIndex = leftCount;
+  tiles = leftCount + 1 + rightCount;
+  // reset selectors to edges for new level
+  redIndex = 0;
+  blueIndex = tiles - 1;
+  locked = false;
+  lastActive = null;
+}
+
+// Color mode for left and right palettes
+// leftPalette cycles: red -> green -> blue (initial red)
+// rightPalette cycles: blue -> green -> red (initial blue)
+const LEFT_PALETTE = ['red', 'green', 'blue'];
+const RIGHT_PALETTE = ['blue', 'green', 'red'];
+let leftColorMode = 0; // index into LEFT_PALETTE
+let rightColorMode = 0; // index into RIGHT_PALETTE
+
+function getShadeForBase(base, t) {
+  // t in [0,1], return p5 color where the main channel is 255 and others are lerped
+  if (base === 'red') {
+    return color(255, round(lerp(0, 150, t)), round(lerp(0, 150, t)));
+  } else if (base === 'green') {
+    return color(round(lerp(0, 150, t)), 255, round(lerp(0, 150, t)));
+  } else if (base === 'blue') {
+    return color(round(lerp(0, 120, t)), round(lerp(0, 120, t)), 255);
+  }
+  return color(255);
+}
 
 function setup() {
   let cnv = createCanvas(canvasW, canvasH);
@@ -34,6 +76,8 @@ function setup() {
   rectMode(CORNER);
   textAlign(CENTER, CENTER);
   noStroke();
+  // start at level 1
+  setLevel(1);
   generateReference();
 }
 
@@ -71,6 +115,7 @@ function playLoseSound() {
 
 function generateReference() {
   // pick one index from the red side and one from the blue side
+  // ensure counts are up-to-date for the current level
   refIndices[0] = floor(random(0, leftCount));
   // skip the central mix index when picking blue side
   refIndices[1] = leftCount + 1 + floor(random(0, rightCount));
@@ -94,23 +139,38 @@ function colorForIndex(i) {
   // returns a p5.Color. Left side (0..leftCount-1) are red shades,
   // index == mixIndex is neutral white, right side (mixIndex+1..tiles-1) are blue shades.
   if (i < leftCount) {
-    // red shades from pure red to a softer pink
+    // left side shades based on leftColorMode
     let t = leftCount === 1 ? 0 : constrain(i / (leftCount - 1), 0, 1);
-    let r = 255;
-    let g = round(lerp(0, 150, t));
-    let b = round(lerp(0, 150, t));
-    return color(r, g, b);
+    let base = LEFT_PALETTE[leftColorMode % LEFT_PALETTE.length];
+    return getShadeForBase(base, t);
   } else if (i === mixIndex) {
     return color(255); // neutral white for the mix tile in the row
   } else {
-    // blue shades from softer light-blue to pure blue
+    // right side shades based on rightColorMode
     let j = i - (leftCount + 1);
     let t = rightCount === 1 ? 0 : constrain(j / (rightCount - 1), 0, 1);
-    let r = round(lerp(120, 0, t));
-    let g = round(lerp(120, 0, t));
-    let b = 255;
-    return color(r, g, b);
+    // reverse t so tiles go from light (near mix) to deep (outer edge)
+    t = 1 - t;
+    let base = RIGHT_PALETTE[rightColorMode % RIGHT_PALETTE.length];
+    return getShadeForBase(base, t);
   }
+}
+
+// regenerate reference color and indices but preserve selector positions
+function regenerateReferencePreserveSelectors() {
+  // pick one index from the red side and one from the blue side
+  refIndices[0] = floor(random(0, leftCount));
+  refIndices[1] = leftCount + 1 + floor(random(0, rightCount));
+  let c1 = colorForIndex(refIndices[0]);
+  let c2 = colorForIndex(refIndices[1]);
+  refColor = color(
+    round((red(c1) + red(c2)) / 2),
+    round((green(c1) + green(c2)) / 2),
+    round((blue(c1) + blue(c2)) / 2)
+  );
+  // keep selectors where they are; clear messages and unlock if needed
+  stateMessage = '';
+  locked = false;
 }
 
 function draw() {
@@ -135,6 +195,11 @@ function draw() {
   fill(0);
   textSize(14);
   text('REFERENCE COLOR', centerX, refY - 18);
+
+  // show current LEVEL 1/2/3
+  textSize(14);
+  fill(60);
+  text('LEVEL ' + level, centerX, refY + refH + 20);
 
   // (Removed large mix preview) we'll draw only the small mix tile in the row
 
@@ -253,14 +318,6 @@ function draw() {
     // when the tile row has been shifted (keeps relative spacing)
     text(stateMessage, centerX, refY + refH + 6 + (typeof tileRowOffset !== 'undefined' ? tileRowOffset : 0));
   }
-
-  // Debug: optionally show reference indices (hidden normally) - comment out if undesired
-  // textSize(12); text('ref indices: '+refIndices[0] + ','+refIndices[1], centerX, refY + refH + 2);
-
-  // show tiny legend for which keys do what
-  fill(50);
-  textSize(12);
-  text('A/D = move Red • J/L = move Blue • R = lock', centerX, height - 18);
 }
 
 function keyPressed() {
@@ -272,6 +329,18 @@ function keyPressed() {
   // remember previous indices to detect actual movement
   let prevRed = redIndex;
   let prevBlue = blueIndex;
+
+  // color mode keys: S/s cycle left palette, K/k cycle right palette
+  if (k === 's') {
+    leftColorMode = (leftColorMode + 1) % LEFT_PALETTE.length;
+    // update reference color to match new palette without resetting selectors
+    regenerateReferencePreserveSelectors();
+  }
+  if (k === 'k') {
+    rightColorMode = (rightColorMode + 1) % RIGHT_PALETTE.length;
+    // update reference color to match new palette without resetting selectors
+    regenerateReferencePreserveSelectors();
+  }
 
   if (k === 'a') {
     redIndex = max(0, redIndex - 1);
@@ -311,17 +380,30 @@ function computeMixAndCheck() {
 
   // compare mixColor to refColor exactly
   if (colorsEqual(mixColor, refColor)) {
-    stateMessage = 'YOU WIN!';
-    // play win sound, keep locked and show victory, then restart after a short delay
+    // win: advance to next level if any, otherwise restart from level 1
     playWinSound();
-    setTimeout(() => {
-      generateReference();
-    }, 1400);
+    if (level < LEVELS.length) {
+      stateMessage = 'LEVEL ' + level + ' CLEAR!';
+      // advance after short delay
+      setTimeout(() => {
+        setLevel(level + 1);
+        generateReference();
+      }, 1400);
+    } else {
+      // final level cleared
+      stateMessage = 'YOU WIN THE GAME!';
+      setTimeout(() => {
+        // restart from level 1
+        setLevel(1);
+        generateReference();
+      }, 1400);
+    }
   } else {
-    stateMessage = 'No Match';
-    // play lose sound and restart after a short delay
+    // lose: play sound and restart the current level (do not go back to level 1)
     playLoseSound();
+    stateMessage = 'No Match';
     setTimeout(() => {
+      // regenerate reference for the same level
       generateReference();
     }, 1400);
   }
