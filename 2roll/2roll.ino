@@ -1,3 +1,5 @@
+#include <DFRobotDFPlayerMini.h>
+
 #include <Wire.h>
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_Sensor.h>
@@ -28,10 +30,10 @@ int lastZone1 = 0; // previous zone for MPU1
 int lastZone2 = 0; // previous zone for MPU2
 
 // Button for 'R' action (one-shot on press)
-const int BUTTON_PIN = 4; // button to GND, we'll use INPUT_PULLUP
+const int BUTTON_PIN = 5; // button to GND, we'll use INPUT_PULLUP
 int prevButtonState = HIGH;
 // second button
-const int BUTTON_PIN2 = 5;
+const int BUTTON_PIN2 = 6;
 int prevButtonState2 = HIGH;
 
 // double-click detection
@@ -49,31 +51,78 @@ const unsigned long DEBOUNCE_MS = 50;
 // NeoPixel LEDs on D9 and D10 (25 LEDs each)
 #define LED_LEFT_PIN 9
 #define LED_RIGHT_PIN 10
-const int NUM_LEDS = 25; // number of LEDs per strip
+const int NUM_LEDS = 28; // number of LEDs per strip
 Adafruit_NeoPixel ledLeft = Adafruit_NeoPixel(NUM_LEDS, LED_LEFT_PIN, NEO_GRB + NEO_KHZ800);
 Adafruit_NeoPixel ledRight = Adafruit_NeoPixel(NUM_LEDS, LED_RIGHT_PIN, NEO_GRB + NEO_KHZ800);
 int leftColorIndex = 0;  // 0=red,1=green,2=blue
 int rightColorIndex = 0; // 0=blue,1=green,2=red
 
-// helper: map angle to zone number per spec
+// helper: map angle to zone number for Player 1 (0-6, positive tilt)
+// Zone 0: -10° to +10° (dead zone, grid position 1)
+// Zone 1: +10° to +30° (grid position 2)
+// Zone 2: +30° to +50° (grid position 3)
+// Zone 3: +50° to +70° (grid position 4)
+// Zone 4: +70° to +90° (grid position 5)
+// Zone 5: +90° to +110° (grid position 6)
+// Zone 6: +110° to +130° (grid position 7)
 int getZone(float angle) {
-  // dead zone
-  if (angle > -10.0 && angle < 10.0) return 0;
-  // right tilt positive zones
-  if (angle >= 30.0 && angle <= 50.0) return 1;
-  if (angle > 50.0 && angle <= 70.0) return 2;
-  if (angle > 70.0 && angle <= 90.0) return 3;
-  if (angle > 90.0 && angle <= 110.0) return 4;
-  if (angle > 110.0 && angle <= 130.0) return 5;
-  if (angle > 130.0 && angle <= 150.0) return 6;
-  // left tilt negative zones
-  if (angle <= -30.0 && angle >= -50.0) return -1;
-  if (angle < -50.0 && angle >= -70.0) return -2;
-  if (angle < -70.0 && angle >= -90.0) return -3;
-  if (angle < -90.0 && angle >= -110.0) return -4;
-  if (angle < -110.0 && angle >= -130.0) return -5;
-  if (angle < -130.0 && angle >= -150.0) return -6;
+  if (angle < -10.0) return 0;
+  if (angle >= -10.0 && angle <= 10.0) return 0;
+  if (angle > 10.0 && angle <= 30.0) return 1;
+  if (angle > 30.0 && angle <= 50.0) return 2;
+  if (angle > 50.0 && angle <= 70.0) return 3;
+  if (angle > 70.0 && angle <= 90.0) return 4;
+  if (angle > 90.0 && angle <= 110.0) return 5;
+  if (angle > 110.0 && angle <= 130.0) return 6;
+  if (angle > 130.0) return 6;
   return 0;
+}
+
+// helper: map angle to zone number for Player 2 (0-6, negative tilt mirror)
+// Zone 0: +10° to -10° (dead zone, grid position 7/last) or any positive tilt beyond +10°
+// Zone 1: -10° to -30° (grid position 6)
+// Zone 2: -30° to -50° (grid position 5)
+// Zone 3: -50° to -70° (grid position 4)
+// Zone 4: -70° to -90° (grid position 3)
+// Zone 5: -90° to -110° (grid position 2)
+// Zone 6: -110° to -130° (grid position 1; < -130° also clamped to 6)
+int getZoneRight(float angle) {
+  // Positive tilts keep player2 at the last grid (zone 0)
+  if (angle >= -10.0) return 0;
+  if (angle >= -30.0 && angle < -10.0) return 1;
+  if (angle >= -50.0 && angle < -30.0) return 2;
+  if (angle >= -70.0 && angle < -50.0) return 3;
+  if (angle >= -90.0 && angle < -70.0) return 4;
+  if (angle >= -110.0 && angle < -90.0) return 5;
+  if (angle >= -130.0 && angle < -110.0) return 6;
+  // beyond -130° stays at zone 6
+  if (angle < -130.0) return 6;
+  return 0;
+}
+
+// Function to apply LED colors based on level
+void applyLevelLedPalette(int lvl) {
+  // level1: left red, right blue
+  // level2: left green, right blue
+  // level3: left red, right green
+  uint32_t leftCol, rightCol;
+  if (lvl == 1) {
+    leftCol = ledLeft.Color(255, 0, 0);
+    rightCol = ledRight.Color(0, 0, 255);
+  } else if (lvl == 2) {
+    leftCol = ledLeft.Color(0, 255, 0);
+    rightCol = ledRight.Color(0, 0, 255);
+  } else { // lvl == 3
+    leftCol = ledLeft.Color(255, 0, 0);
+    rightCol = ledRight.Color(0, 255, 0);
+  }
+  for (int i = 0; i < NUM_LEDS; i++) {
+    ledLeft.setPixelColor(i, leftCol);
+    ledRight.setPixelColor(i, rightCol);
+  }
+  ledLeft.show();
+  ledRight.show();
+  Serial.print("Applied LED palette for level "); Serial.println(lvl);
 }
 
 void setup() {
@@ -117,15 +166,8 @@ void setup() {
   // set a comfortable default brightness (0-255)
   ledLeft.setBrightness(80);
   ledRight.setBrightness(80);
-  // initial colors: left red, right blue
-  for (int i = 0; i < NUM_LEDS; i++) {
-    ledLeft.setPixelColor(i, ledLeft.Color(255, 0, 0));
-  }
-  ledLeft.show();
-  for (int i = 0; i < NUM_LEDS; i++) {
-    ledRight.setPixelColor(i, ledRight.Color(0, 0, 255));
-  }
-  ledRight.show();
+  // Apply Level 1 palette on startup
+  applyLevelLedPalette(1);
 }
 
 void loop() {
@@ -153,36 +195,40 @@ void loop() {
   }
 
   Serial.print("Angle1 (0x68): ");
-  Serial.print(angle1);
+  Serial.print(smoothedAngle1);
   Serial.print("°,   Angle2 (0x69): ");
-  Serial.print(angle2);
+  Serial.print(smoothedAngle2);
   Serial.println("°");
 
   // --- Zone-based angle mapping ---
+  // Zone number directly corresponds to grid position (0-6)
+  // Moving to higher zone -> D/J (forward)
+  // Moving to lower zone -> A/L (backward)
+  
   int zone1 = getZone(smoothedAngle1);
   if (zone1 != lastZone1) {
-    if (zone1 > 0) {
-      Serial.print("MPU1 entered right zone "); Serial.println(zone1);
+    if (zone1 > lastZone1) {
+      // Zone increased: moving forward
+      Serial.print("MPU1 zone "); Serial.print(lastZone1); Serial.print(" -> "); Serial.print(zone1); Serial.println(" (forward) -> D");
       Keyboard.write('D');
-    } else if (zone1 < 0) {
-      Serial.print("MPU1 entered left zone "); Serial.println(zone1);
+    } else if (zone1 < lastZone1) {
+      // Zone decreased: moving backward
+      Serial.print("MPU1 zone "); Serial.print(lastZone1); Serial.print(" -> "); Serial.print(zone1); Serial.println(" (backward) -> A");
       Keyboard.write('A');
-    } else {
-      Serial.println("MPU1 returned to dead zone");
     }
     lastZone1 = zone1;
   }
 
-  int zone2 = getZone(smoothedAngle2);
+  int zone2 = getZoneRight(smoothedAngle2);
   if (zone2 != lastZone2) {
-    if (zone2 > 0) {
-      Serial.print("MPU2 entered right zone "); Serial.println(zone2);
-      Keyboard.write('L');
-    } else if (zone2 < 0) {
-      Serial.print("MPU2 entered left zone "); Serial.println(zone2);
+    if (zone2 > lastZone2) {
+      // Zone increased: moving forward for Player 2 -> J
+      Serial.print("MPU2 zone "); Serial.print(lastZone2); Serial.print(" -> "); Serial.print(zone2); Serial.println(" (forward) -> J");
       Keyboard.write('J');
-    } else {
-      Serial.println("MPU2 returned to dead zone");
+    } else if (zone2 < lastZone2) {
+      // Zone decreased: moving backward for Player 2 -> L
+      Serial.print("MPU2 zone "); Serial.print(lastZone2); Serial.print(" -> "); Serial.print(zone2); Serial.println(" (backward) -> L");
+      Keyboard.write('L');
     }
     lastZone2 = zone2;
   }
@@ -196,82 +242,55 @@ void loop() {
   if (!dPressed && !aPressed && !lPressed && !jPressed) Serial.print("(none)");
   Serial.println();
 
-  // --- Button handling: one-shot send 'r' when button transitions from HIGH -> LOW ---
+  // --- Button handling: single-press locks color (send lock key) ---
   int buttonState = digitalRead(BUTTON_PIN);
   int buttonState2 = digitalRead(BUTTON_PIN2);
 
   unsigned long now = millis();
 
-  // BUTTON 1 (D4) handling: detect first click and wait for double-click window before sending single 'r'
+  // BUTTON 1 (D4): on falling edge, send lock key(s); do NOT change LEDs
   if (buttonState == LOW && prevButtonState == HIGH) {
-    // falling edge detected
     if ((now - lastBounce1) > DEBOUNCE_MS) {
       lastBounce1 = now;
-      if (clickCount1 == 0) {
-        // first click: record time and wait for possible second click
-        clickCount1 = 1;
-        lastPressTime1 = now;
-        Serial.println("Button1 first click recorded");
-      } else if (clickCount1 == 1 && (now - lastPressTime1) <= DOUBLE_CLICK_MS) {
-        // second click within window -> double-click
-        Serial.println("Button1 double-click -> sending 'S'");
-        Keyboard.write('S');
-        // cycle left color: red -> green -> blue
-        leftColorIndex = (leftColorIndex + 1) % 3;
-        uint32_t col;
-        if (leftColorIndex == 0) col = ledLeft.Color(255, 0, 0);
-        else if (leftColorIndex == 1) col = ledLeft.Color(0, 255, 0);
-        else col = ledLeft.Color(0, 0, 255);
-        for (int pi = 0; pi < NUM_LEDS; pi++) ledLeft.setPixelColor(pi, col);
-        ledLeft.show();
-        Serial.print("Left LED color index -> "); Serial.println(leftColorIndex);
-        // reset
-        clickCount1 = 0;
-        lastPressTime1 = 0;
-      }
+      Serial.println("Button1 single-press -> sending lock key 'r' and 'R'");
+      Keyboard.write('r');
+      delay(10);
+      Keyboard.write('R');
     }
   }
-  // if we've seen a single first click and the window expired, treat as single press
-  if (clickCount1 == 1 && (now - lastPressTime1) > DOUBLE_CLICK_MS) {
-    Serial.println("Button1 single-click timeout -> sending 'r'");
-    Keyboard.write('r');
-    clickCount1 = 0;
-    lastPressTime1 = 0;
-  }
 
-  // BUTTON 2 (D5) handling: same pattern as Button1
+  // BUTTON 2 (D5): on falling edge, send lock key(s); do NOT change LEDs
   if (buttonState2 == LOW && prevButtonState2 == HIGH) {
     if ((now - lastBounce2) > DEBOUNCE_MS) {
       lastBounce2 = now;
-      if (clickCount2 == 0) {
-        clickCount2 = 1;
-        lastPressTime2 = now;
-        Serial.println("Button2 first click recorded");
-      } else if (clickCount2 == 1 && (now - lastPressTime2) <= DOUBLE_CLICK_MS) {
-        Serial.println("Button2 double-click -> sending 'K'");
-        Keyboard.write('K');
-        rightColorIndex = (rightColorIndex + 1) % 3; // blue -> green -> red
-        uint32_t col2;
-        if (rightColorIndex == 0) col2 = ledRight.Color(0, 0, 255);
-        else if (rightColorIndex == 1) col2 = ledRight.Color(0, 255, 0);
-        else col2 = ledRight.Color(255, 0, 0);
-        for (int pi2 = 0; pi2 < NUM_LEDS; pi2++) ledRight.setPixelColor(pi2, col2);
-        ledRight.show();
-        Serial.print("Right LED color index -> "); Serial.println(rightColorIndex);
-        clickCount2 = 0;
-        lastPressTime2 = 0;
-      }
+      Serial.println("Button2 single-press -> sending lock key 'r' and 'R'");
+      Keyboard.write('r');
+      delay(10);
+      Keyboard.write('R');
     }
-  }
-  if (clickCount2 == 1 && (now - lastPressTime2) > DOUBLE_CLICK_MS) {
-    Serial.println("Button2 single-click timeout -> sending 'r'");
-    Keyboard.write('r');
-    clickCount2 = 0;
-    lastPressTime2 = 0;
   }
 
   prevButtonState = buttonState;
   prevButtonState2 = buttonState2;
 
+  // process any incoming serial commands (e.g., level updates)
+  processSerialCommands();
+
   delay(50); // stability per spec
+}
+
+// Serial command processing: accept 'L1','L2','L3' to set LED palettes per level
+void processSerialCommands() {
+  while (Serial.available() > 0) {
+    String cmd = Serial.readStringUntil('\n');
+    cmd.trim();
+    if (cmd.length() == 0) continue;
+    Serial.print("Serial cmd: "); Serial.println(cmd);
+    if (cmd.startsWith("L")) {
+      int lvl = cmd.substring(1).toInt();
+      if (lvl >= 1 && lvl <= 3) {
+        applyLevelLedPalette(lvl);
+      }
+    }
+  }
 }

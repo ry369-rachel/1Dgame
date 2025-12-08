@@ -3,15 +3,39 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Color Blend</title>
+    <title>Color Splash</title>
     <style>
       body { margin: 0; background: #fff; font-family: Arial, Helvetica, sans-serif; }
       #sketch-holder { display:flex; justify-content:center; padding-top:10px; }
       .instructions { text-align:center; margin-top:8px; color:#222; }
       .kbd { font-weight:700; background:#eee; border-radius:3px; padding:2px 6px; margin:0 4px; }
+      #serial-btn {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        font-size: 14px;
+        color: #666;
+        background: none;
+        border: none;
+        cursor: pointer;
+        padding: 0;
+        text-decoration: none;
+      }
+      #serial-btn:hover {
+        color: #333;
+      }
+      #serial-status {
+        position: absolute;
+        top: 30px;
+        left: 10px;
+        font-size: 12px;
+        color: #666;
+      }
     </style>
   </head>
   <body>
+    <button id="serial-btn" onclick="toggleSerialConnection()">Connect Arduino</button>
+    <div id="serial-status"></div>
     <div id="sketch-holder"></div>
     <!-- <div class="instructions">
       Controls: <span class="kbd">A</span>/<span class="kbd">D</span> move Red selector left/right &nbsp; • &nbsp;

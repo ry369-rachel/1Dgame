@@ -12,7 +12,7 @@ let tileW = 48;
 let tileH = 48;
 let padding = 8;
 let canvasW = Math.max(tiles * (tileW + 2) + 200, 900);
-let canvasH = 420;
+let canvasH = 520; // increased from 420 to accommodate downward offset
 
 let redIndex = 0;
 let blueIndex = tiles - 1;
@@ -48,6 +48,25 @@ function setLevel(n) {
   blueIndex = tiles - 1;
   locked = false;
   lastActive = null;
+  // set palettes for this level so page colors update
+  // level1: left red, right blue
+  // level2: left green, right blue
+  // level3: left red, right green
+  if (level === 1) {
+    leftColorMode = LEFT_PALETTE.indexOf('red');
+    rightColorMode = RIGHT_PALETTE.indexOf('blue');
+  } else if (level === 2) {
+    leftColorMode = LEFT_PALETTE.indexOf('green');
+    rightColorMode = RIGHT_PALETTE.indexOf('blue');
+  } else {
+    leftColorMode = LEFT_PALETTE.indexOf('red');
+    rightColorMode = RIGHT_PALETTE.indexOf('green');
+  }
+  // regenerate reference and visuals for the new level
+  generateReference();
+
+  // send new level to Arduino (if connected)
+  if (typeof sendLevelToArduino === 'function') sendLevelToArduino(level);
 }
 
 // Color mode for left and right palettes
@@ -79,6 +98,111 @@ function setup() {
   // start at level 1
   setLevel(1);
   generateReference();
+}
+
+// --- Web Serial helpers ---
+let serialPort = null;
+let serialWriter = null;
+let serialReader = null;
+let isSerialConnected = false;
+
+// Global function for button click
+function toggleSerialConnection() {
+  if (isSerialConnected) {
+    disconnectArduino();
+  } else {
+    connectArduino();
+  }
+}
+
+async function connectArduino() {
+  try {
+    serialPort = await navigator.serial.requestPort();
+    await serialPort.open({ baudRate: 115200 });
+
+    // writer (TextEncoder) for sending commands
+    const encoder = new TextEncoderStream();
+    const writableStreamClosed = encoder.readable.pipeTo(serialPort.writable);
+    serialWriter = encoder.writable.getWriter();
+
+    // reader (TextDecoder) to receive lines from Arduino and log them
+    const decoder = new TextDecoderStream();
+    const readableStreamClosed = serialPort.readable.pipeTo(decoder.writable);
+    serialReader = decoder.readable.getReader();
+
+    isSerialConnected = true;
+    updateSerialUI();
+    console.log('Arduino serial connected');
+    
+    // start background read loop
+    readSerialLoop();
+    
+    // send current level once connected
+    await sendLevelToArduino(level);
+  } catch (e) {
+    console.error('Serial connect error', e);
+    updateSerialUI();
+  }
+}
+
+async function disconnectArduino() {
+  try {
+    if (serialReader) {
+      await serialReader.cancel();
+      serialReader = null;
+    }
+    if (serialWriter) {
+      await serialWriter.close();
+      serialWriter = null;
+    }
+    if (serialPort) {
+      await serialPort.close();
+      serialPort = null;
+    }
+    isSerialConnected = false;
+    updateSerialUI();
+    console.log('Arduino disconnected');
+  } catch (e) {
+    console.error('Serial disconnect error', e);
+  }
+}
+
+function updateSerialUI() {
+  const btn = document.getElementById('serial-btn');
+  const status = document.getElementById('serial-status');
+  if (isSerialConnected) {
+    btn.style.display = 'none'; // Hide button when connected
+    status.style.display = 'none'; // Hide status when connected
+  } else {
+    btn.textContent = 'Connect Arduino';
+    btn.style.display = 'block'; // Show button when disconnected
+    status.textContent = '✗ Not connected';
+    status.style.color = '#999';
+    status.style.display = 'block';
+  }
+}
+
+async function readSerialLoop() {
+  if (!serialReader) return;
+  try {
+    while (true) {
+      const { value, done } = await serialReader.read();
+      if (done) break;
+      if (value) console.log('Arduino:', value);
+    }
+  } catch (e) {
+    console.error('Serial read error', e);
+  }
+}
+
+async function sendLevelToArduino(n) {
+  if (!serialWriter) return;
+  try {
+    await serialWriter.write('L' + n + '\n');
+    console.log('Sent level to Arduino: L' + n);
+  } catch (e) {
+    console.error('Failed to send level to Arduino', e);
+  }
 }
 
 function preload() {
@@ -184,7 +308,7 @@ function draw() {
   // center the reference block and the tiles row vertically
   // totalGroupHeight = reference block height + gap(28) + tiles row height
   let totalGroupHeight = refH + 28 + tileH;
-  let topY = height / 2 - totalGroupHeight / 2;
+  let topY = height / 2 - totalGroupHeight / 2 + 40; // add 40px downward offset
   let refX = centerX - refW / 2;
   let refY = topY;
   stroke(40);
@@ -192,9 +316,6 @@ function draw() {
   fill(refColor);
   rect(refX, refY, refW, refH);
   noStroke();
-  fill(0);
-  textSize(14);
-  text('REFERENCE COLOR', centerX, refY - 18);
 
   // show current LEVEL 1/2/3
   textSize(14);
